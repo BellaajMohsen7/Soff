@@ -18,10 +18,12 @@ from dataclasses import dataclass
 try:
     from sentence_transformers import SentenceTransformer
     from sklearn.metrics.pairwise import cosine_similarity
+    from fuzzywuzzy import fuzz, process
+    import nltk
     DEPENDENCIES_AVAILABLE = True
 except ImportError:
     DEPENDENCIES_AVAILABLE = False
-    st.error("Veuillez installer les dépendances: pip install sentence-transformers scikit-learn")
+    st.error("Veuillez installer les dépendances: pip install sentence-transformers scikit-learn fuzzywuzzy python-levenshtein nltk")
 
 @dataclass
 class RuleMatch:
@@ -109,6 +111,140 @@ class HandEvaluator:
     def _matches_pattern(self, text: str, patterns: List[str]) -> bool:
         """Vérifier si le texte correspond à un pattern"""
         return any(re.search(pattern, text) for pattern in patterns)
+
+class EnhancedLanguageProcessor:
+    """Processeur de langage amélioré avec fuzzy matching et synonymes"""
+    
+    def __init__(self):
+        self.synonyms = self._initialize_synonyms()
+        self.common_variations = self._initialize_variations()
+        # Download NLTK data if needed
+        try:
+            import nltk
+            nltk.data.find('tokenizers/punkt')
+        except LookupError:
+            try:
+                nltk.download('punkt', quiet=True)
+            except:
+                pass  # Fallback if download fails
+                
+    def _initialize_synonyms(self):
+        """Dictionnaire de synonymes pour améliorer la compréhension"""
+        return {
+            'fr': {
+                'annoncer': ['dire', 'déclarer', 'proclamer', 'énoncer', 'contrat'],
+                'recommandation': ['conseil', 'suggestion', 'avis', 'guidance', 'indication'],
+                'règle': ['loi', 'principe', 'norme', 'règlement', 'directive'],
+                'officiel': ['authentique', 'légal', 'valide', 'réglementaire', 'formel'],
+                'atout': ['trump', 'triomphe', 'carte-maître'],
+                'belote': ['roi-dame', 'bonus'],
+                'points': ['score', 'pts', 'résultat'],
+                'main': ['cartes', 'jeu', 'distribution'],
+                'équipe': ['partenaire', 'binôme', 'duo', 'team'],
+                'contrat': ['annonce', 'engagement', 'bid'],
+                'capot': ['tous-plis', 'clean', 'sweep']
+            },
+            'en': {
+                'announce': ['say', 'declare', 'proclaim', 'state', 'contract'],
+                'recommendation': ['advice', 'suggestion', 'guidance', 'tip', 'counsel'],
+                'rule': ['law', 'principle', 'norm', 'regulation', 'directive'],
+                'official': ['authentic', 'legal', 'valid', 'regulatory', 'formal'],
+                'trump': ['atout', 'triomphe', 'master-card'],
+                'belote': ['king-queen', 'bonus'],
+                'points': ['score', 'pts', 'result'],
+                'hand': ['cards', 'game', 'distribution'],
+                'team': ['partner', 'pair', 'duo', 'équipe'],
+                'contract': ['announcement', 'engagement', 'bid'],
+                'capot': ['all-tricks', 'clean', 'sweep']
+            }
+        }
+    
+    def _initialize_variations(self):
+        """Variations communes et fautes de frappe"""
+        return {
+            'fr': {
+                'belote': ['belote', 'belotte', 'b3lote', 'belot'],
+                'rebelote': ['rebelote', 'rebelotte', 'r3belote', 'rebelot'],
+                'recommandation': ['recommandation', 'recomandation', 'recomendation'],
+                'officiel': ['officiel', 'oficiel', 'officielle'],
+                'annoncer': ['annoncer', 'anoncer', 'annonser'],
+                'atout': ['atout', 'atouts', 'attout', 'atou'],
+                'points': ['points', 'point', 'pts', 'pt']
+            },
+            'en': {
+                'belote': ['belote', 'belotte', 'b3lote', 'belot'],
+                'rebelote': ['rebelote', 'rebelotte', 'r3belote', 'rebelot'],
+                'recommendation': ['recommendation', 'recomendation', 'reccomendation'],
+                'official': ['official', 'oficial', 'officiel'],
+                'announce': ['announce', 'anounce', 'annoncer'],
+                'trump': ['trump', 'trumps', 'tromp', 'trum'],
+                'points': ['points', 'point', 'pts', 'pt']
+            }
+        }
+    
+    def normalize_query(self, query: str, language: str = 'fr') -> str:
+        """Normaliser la requête avec correction des fautes et expansion de synonymes"""
+        query_lower = query.lower().strip()
+        
+        # Correction des fautes communes avec fuzzy matching
+        query_corrected = self._correct_common_typos(query_lower, language)
+        
+        # Expansion avec synonymes
+        query_expanded = self._expand_with_synonyms(query_corrected, language)
+        
+        return query_expanded
+    
+    def _correct_common_typos(self, query: str, language: str) -> str:
+        """Corriger les fautes de frappe communes"""
+        if not DEPENDENCIES_AVAILABLE:
+            return query
+            
+        variations = self.common_variations.get(language, {})
+        words = query.split()
+        corrected_words = []
+        
+        for word in words:
+            best_match = word
+            best_score = 0
+            
+            for correct_word, variants in variations.items():
+                for variant in variants:
+                    score = fuzz.ratio(word, variant)
+                    if score > best_score and score >= 80:  # 80% similarity threshold
+                        best_match = correct_word
+                        best_score = score
+            
+            corrected_words.append(best_match)
+        
+        return ' '.join(corrected_words)
+    
+    def _expand_with_synonyms(self, query: str, language: str) -> str:
+        """Étendre la requête avec des synonymes"""
+        synonyms = self.synonyms.get(language, {})
+        words = query.split()
+        expanded_words = list(words)  # Start with original words
+        
+        for word in words:
+            if word in synonyms:
+                # Add synonyms to expand matching possibilities
+                expanded_words.extend(synonyms[word][:2])  # Limit to 2 synonyms to avoid bloat
+        
+        return ' '.join(expanded_words)
+    
+    def fuzzy_match_patterns(self, query: str, patterns: List[str], threshold: int = 75) -> List[Tuple[str, int]]:
+        """Correspondance floue avec des patterns"""
+        if not DEPENDENCIES_AVAILABLE:
+            return []
+            
+        matches = []
+        for pattern in patterns:
+            # Remove regex special characters for fuzzy matching
+            clean_pattern = re.sub(r'[.*+?^${}()|[\]\\]', ' ', pattern)
+            score = fuzz.partial_ratio(query, clean_pattern)
+            if score >= threshold:
+                matches.append((pattern, score))
+        
+        return sorted(matches, key=lambda x: x[1], reverse=True)
 
 class BeloteRulesDatabase:
     """Base de données officielle des règles de Belote Contrée Tunisienne"""
@@ -490,6 +626,257 @@ Ace > 10 > King > Queen > Jack > 9 > 8 > 7""",
                     r'how.*play',
                     r'start.*game'
                 ]
+            },
+            
+            'partner_points_official': {
+                'id': 'partner_points_official',
+                'category': 'scoring',
+                'title_fr': '🤝 Système Officiel Points Partenaires',
+                'title_en': '🤝 Official Partner Points System',
+                'content_fr': """**Addition des points partenaires:**
+
+**Règle fondamentale:**
+• Les points de chaque équipe sont additionnés
+• Score total d'équipe = Points joueur 1 + Points joueur 2
+
+**Répartition officielle:**
+• Équipe preneuse: doit atteindre ou dépasser contrat annoncé
+• Équipe adverse: obtient points restants (162 - points preneurs)
+
+**Bonus d'équipe:**
+• Belote/Rebelote: +20 points à l'équipe possédant Roi + Dame d'atout
+• Ces points comptent dans le total final d'équipe
+
+**Calcul spécial échec contrat:**
+• Si équipe preneuse échoue: 0 points
+• Équipe adverse: 162 points + 20 (si belote/rebelote)
+
+**Multiplicateurs d'équipe:**
+• Contrat simple: points normaux
+• Coinché: points × 2 pour toute l'équipe
+• Surcoinché: points × 4 pour toute l'équipe
+
+**Stratégie d'équipe:**
+• Communication autorisée par cartes jouées
+• Coordination essentielle pour réussite contrat
+• Chaque joueur contribue au score global d'équipe""",
+                'content_en': """**Partner points addition:**
+
+**Fundamental rule:**
+• Each team's points are added together
+• Total team score = Player 1 points + Player 2 points
+
+**Official distribution:**
+• Taking team: must reach or exceed announced contract
+• Opposing team: gets remaining points (162 - takers' points)
+
+**Team bonuses:**
+• Belote/Rebelote: +20 points to team owning King + Queen of trump
+• These points count in final team total
+
+**Special contract failure calculation:**
+• If taking team fails: 0 points
+• Opposing team: 162 points + 20 (if belote/rebelote)
+
+**Team multipliers:**
+• Simple contract: normal points
+• Coinched: points × 2 for entire team
+• Surcoinched: points × 4 for entire team
+
+**Team strategy:**
+• Communication allowed through played cards
+• Coordination essential for contract success
+• Each player contributes to global team score""",
+                'keywords_fr': ['partenaire', 'équipe', 'addition', 'points', 'total', 'collaboration', 'coordination'],
+                'keywords_en': ['partner', 'team', 'addition', 'points', 'total', 'collaboration', 'coordination'],
+                'patterns_fr': [
+                    r'points.*partenaire',
+                    r'équipe.*points',
+                    r'addition.*points',
+                    r'collaboration.*points'
+                ],
+                'patterns_en': [
+                    r'partner.*points',
+                    r'team.*points',
+                    r'adding.*points',
+                    r'collaboration.*points'
+                ]
+            },
+            
+            'contract_management_official': {
+                'id': 'contract_management_official',
+                'category': 'contracts',
+                'title_fr': '📋 Gestion Officielle des Contrats',
+                'title_en': '📋 Official Contract Management',
+                'content_fr': """**Gestion des contrats:**
+
+**Phase d'annonce:**
+• Tour d'annonce obligatoire dans le sens horaire
+• Chaque joueur peut annoncer ou passer
+• Annonce = nombre de points + couleur d'atout
+• Exemple: "110 Cœur", "130 Pique"
+
+**Règles d'enchères:**
+• Chaque nouvelle annonce doit être supérieure
+• Progression possible: 90 → 100 → 110 → 120 → 130 → 140
+• Si tous passent après première annonce → contrat validé
+• Si personne n'annonce → redistribution des cartes
+
+**Modification de contrat:**
+• Coinche: doubler les gains/pertes (×2)
+• Surcoinche: quadrupler les gains/pertes (×4)
+• Seule l'équipe adverse peut coincher
+• Réponse possible: surcoinche par équipe preneuse
+
+**Validation du contrat:**
+• Contrat final = dernière annonce + multiplicateur
+• Équipe preneuse = celle qui a fait la dernière annonce
+• Couleur d'atout = celle annoncée dans contrat final
+
+**Responsabilités:**
+• Équipe preneuse: DOIT atteindre points annoncés minimum
+• Échec = 0 points, équipe adverse prend tout (162 + bonus)
+• Succès = points selon calcul officiel + multiplicateurs
+
+**Cas spéciaux:**
+• Capot annoncé: DOIT faire tous les plis (250 points)
+• Général: impossible d'annoncer au-dessus de 140""",
+                'content_en': """**Contract management:**
+
+**Announcement phase:**
+• Mandatory announcement turn clockwise
+• Each player can announce or pass
+• Announcement = points number + trump color
+• Example: "110 Hearts", "130 Spades"
+
+**Bidding rules:**
+• Each new announcement must be higher
+• Possible progression: 90 → 100 → 110 → 120 → 130 → 140
+• If all pass after first announcement → contract validated
+• If no one announces → cards redistributed
+
+**Contract modification:**
+• Coinche: double gains/losses (×2)
+• Surcoinche: quadruple gains/losses (×4)
+• Only opposing team can coinche
+• Possible response: surcoinche by taking team
+
+**Contract validation:**
+• Final contract = last announcement + multiplier
+• Taking team = one who made last announcement
+• Trump color = one announced in final contract
+
+**Responsibilities:**
+• Taking team: MUST reach announced points minimum
+• Failure = 0 points, opposing team takes all (162 + bonus)
+• Success = points according to official calculation + multipliers
+
+**Special cases:**
+• Announced capot: MUST make all tricks (250 points)
+• General: impossible to announce above 140""",
+                'keywords_fr': ['contrat', 'annonce', 'enchère', 'coinche', 'surcoinche', 'validation', 'responsabilité'],
+                'keywords_en': ['contract', 'announcement', 'bid', 'coinche', 'surcoinche', 'validation', 'responsibility'],
+                'patterns_fr': [
+                    r'gestion.*contrat',
+                    r'comment.*annoncer',
+                    r'enchère.*règles',
+                    r'validation.*contrat'
+                ],
+                'patterns_en': [
+                    r'contract.*management',
+                    r'how.*announce',
+                    r'bidding.*rules',
+                    r'contract.*validation'
+                ]
+            },
+            
+            'capot_complete_official': {
+                'id': 'capot_complete_official', 
+                'category': 'special',
+                'title_fr': '🎯 Règles Complètes du Capot',
+                'title_en': '🎯 Complete Capot Rules',
+                'content_fr': """**Capot - Règles complètes:**
+
+**Définition officielle:**
+• Capot = remporter TOUS les plis (8 plis sur 8)
+• Score automatique: 250 points pour l'équipe
+
+**Types de capot:**
+• **Capot annoncé**: déclaré pendant phase d'annonce
+• **Capot réalisé**: fait pendant le jeu sans l'avoir annoncé
+
+**Capot annoncé:**
+• OBLIGATION de faire tous les plis
+• Si échec: équipe adverse prend 250 points + bonus
+• Si réussite: 250 points + multiplicateurs (coinche/surcoinche)
+
+**Capot réalisé (non annoncé):**
+• Bonus de 250 points automatique
+• Remplace le calcul normal de points
+• Pas de pénalité si manqué (calcul normal reprend)
+
+**Conditions pour tenter capot:**
+• Main exceptionnelle requise
+• Tous les maîtres d'atout + cartes fortes
+• Coordination parfaite avec partenaire
+
+**Stratégie capot:**
+• Jouer d'abord les atouts pour vider les adversaires
+• Garder les maîtres pour la fin
+• Éviter de donner des points aux adversaires
+
+**Calcul final:**
+• Capot réussi: 250 points (ignorer autres calculs)
+• Capot échoué (si annoncé): 0 points + 250 pour adversaires
+• Multiplicateurs s'appliquent si coinché/surcoinché""",
+                'content_en': """**Capot - Complete rules:**
+
+**Official definition:**
+• Capot = winning ALL tricks (8 out of 8 tricks)
+• Automatic score: 250 points for the team
+
+**Types of capot:**
+• **Announced capot**: declared during announcement phase
+• **Achieved capot**: done during game without announcing
+
+**Announced capot:**
+• OBLIGATION to make all tricks
+• If failed: opposing team takes 250 points + bonus
+• If successful: 250 points + multipliers (coinche/surcoinche)
+
+**Achieved capot (unannounced):**
+• Automatic 250 points bonus
+• Replaces normal points calculation
+• No penalty if missed (normal calculation resumes)
+
+**Conditions to attempt capot:**
+• Exceptional hand required
+• All trump masters + strong cards
+• Perfect coordination with partner
+
+**Capot strategy:**
+• Play trumps first to empty opponents
+• Keep masters for the end
+• Avoid giving points to opponents
+
+**Final calculation:**
+• Successful capot: 250 points (ignore other calculations)
+• Failed capot (if announced): 0 points + 250 for opponents
+• Multipliers apply if coinched/surcoinched""",
+                'keywords_fr': ['capot', 'tous', 'plis', '250', 'points', 'annoncé', 'réalisé', 'stratégie'],
+                'keywords_en': ['capot', 'all', 'tricks', '250', 'points', 'announced', 'achieved', 'strategy'],
+                'patterns_fr': [
+                    r'capot.*règles',
+                    r'tous.*plis',
+                    r'250.*points',
+                    r'capot.*annoncé'
+                ],
+                'patterns_en': [
+                    r'capot.*rules',
+                    r'all.*tricks',
+                    r'250.*points',
+                    r'capot.*announced'
+                ]
             }
         }
         
@@ -578,6 +965,7 @@ class SofieneAI:
         self.model = load_sentence_transformer()
         self.rules_db = BeloteRulesDatabase()
         self.hand_evaluator = HandEvaluator()
+        self.language_processor = EnhancedLanguageProcessor()
         self.rule_embeddings = {}
         self.context_window = 3
         
@@ -631,81 +1019,124 @@ class SofieneAI:
             return {}
     
     def handle_specific_patterns(self, query: str, language: str = 'fr') -> Optional[str]:
-        """Gérer les patterns spécifiques avec reconnaissance précise"""
+        """Gérer les patterns spécifiques avec reconnaissance précise et fuzzy matching"""
+        # Normalize query first
+        normalized_query = self.language_processor.normalize_query(query, language)
         query_lower = query.lower().strip()
         
-        # Patterns d'évaluation de main
+        # Enhanced pattern recognition with more variations
         hand_patterns = {
             'fr': [
                 r'j.ai.*(as|valet|roi|dame|10|9|8|7).*que.*annoncer',
                 r'j.ai.*main.*annoncer',
                 r'que.*annoncer.*avec.*(as|valet|roi|dame|10|9|8|7)',
-                r'main.*(as|valet|roi|dame|10|9|8|7).*annoncer'
+                r'main.*(as|valet|roi|dame|10|9|8|7).*annoncer',
+                r'avec.*cartes.*annoncer',
+                r'évaluer.*main',
+                r'analyser.*jeu',
+                r'conseil.*main'
             ],
             'en': [
                 r'i.have.*(ace|jack|king|queen|10|9|8|7).*what.*announce',
                 r'i.have.*hand.*announce',
                 r'what.*announce.*with.*(ace|jack|king|queen|10|9|8|7)',
-                r'hand.*(ace|jack|king|queen|10|9|8|7).*announce'
+                r'hand.*(ace|jack|king|queen|10|9|8|7).*announce',
+                r'with.*cards.*announce',
+                r'evaluate.*hand',
+                r'analyze.*game',
+                r'advice.*hand'
             ]
         }
         
-        # Vérifier les patterns d'évaluation de main
+        # Check both original and normalized queries
         patterns = hand_patterns.get(language, hand_patterns['fr'])
         for pattern in patterns:
-            if re.search(pattern, query_lower):
+            if re.search(pattern, query_lower) or re.search(pattern, normalized_query):
                 return self.handle_hand_evaluation(query, language)
         
-        # Patterns de recommandations d'annonces
+        # Enhanced announcement patterns with more variations
         announcement_patterns = {
             'fr': [
-                (r'recommandation.*?(?:pour|de).*?(\d{2,3})', self.get_announcement_recommendation),
+                (r'recommandation.*?(?:pour|de|sur).*?(\d{2,3})', self.get_announcement_recommendation),
                 (r'(\d{2,3}).*points.*recommandation', self.get_announcement_recommendation),
                 (r'quand.*annoncer.*?(\d{2,3})', self.get_announcement_conditions),
                 (r'annoncer.*?(\d{2,3})', self.get_announcement_conditions),
-                (r'contrat.*?(\d{2,3})', self.get_announcement_recommendation)
+                (r'contrat.*?(\d{2,3})', self.get_announcement_recommendation),
+                (r'conseil.*?(\d{2,3})', self.get_announcement_recommendation),
+                (r'règle.*annonce.*?(\d{2,3})', self.get_announcement_recommendation),
+                (r'comment.*faire.*?(\d{2,3})', self.get_announcement_conditions)
             ],
             'en': [
-                (r'recommendation.*?(?:for|of).*?(\d{2,3})', self.get_announcement_recommendation),
+                (r'recommendation.*?(?:for|of|on).*?(\d{2,3})', self.get_announcement_recommendation),
                 (r'(\d{2,3}).*points.*recommendation', self.get_announcement_recommendation),
                 (r'when.*announce.*?(\d{2,3})', self.get_announcement_conditions),
                 (r'announce.*?(\d{2,3})', self.get_announcement_conditions),
-                (r'contract.*?(\d{2,3})', self.get_announcement_recommendation)
+                (r'contract.*?(\d{2,3})', self.get_announcement_recommendation),
+                (r'advice.*?(\d{2,3})', self.get_announcement_recommendation),
+                (r'rule.*announce.*?(\d{2,3})', self.get_announcement_recommendation),
+                (r'how.*make.*?(\d{2,3})', self.get_announcement_conditions)
             ]
         }
         
         patterns = announcement_patterns.get(language, announcement_patterns['fr'])
         for pattern, handler in patterns:
-            match = re.search(pattern, query_lower)
-            if match:
-                try:
-                    points_str = match.group(1)
-                    points = int(points_str)
-                    if 90 <= points <= 140:
-                        return handler(points, language)
-                except (ValueError, IndexError):
-                    continue
+            # Try both queries
+            for test_query in [query_lower, normalized_query]:
+                match = re.search(pattern, test_query)
+                if match:
+                    try:
+                        points_str = match.group(1)
+                        points = int(points_str)
+                        if 90 <= points <= 140:
+                            return handler(points, language)
+                    except (ValueError, IndexError):
+                        continue
         
-        # Patterns belote/rebelote
+        # Enhanced belote/rebelote patterns with more variations
         belote_patterns = {
             'fr': [
                 r'belote.*rebelote',
                 r'quand.*utiliser.*belote',
                 r'comment.*belote',
-                r'roi.*dame.*atout'
+                r'roi.*dame.*atout',
+                r'bonus.*belote',
+                r'règle.*belote',
+                r'belote.*comment',
+                r'utilisation.*belote'
             ],
             'en': [
                 r'belote.*rebelote',
                 r'when.*use.*belote',
                 r'how.*belote',
-                r'king.*queen.*trump'
+                r'king.*queen.*trump',
+                r'bonus.*belote',
+                r'rule.*belote',
+                r'belote.*how',
+                r'using.*belote'
             ]
         }
         
         patterns = belote_patterns.get(language, belote_patterns['fr'])
         for pattern in patterns:
-            if re.search(pattern, query_lower):
+            if re.search(pattern, query_lower) or re.search(pattern, normalized_query):
                 return self.get_belote_rebelote_info(language)
+        
+        # Fuzzy matching for patterns if no exact match found
+        if DEPENDENCIES_AVAILABLE:
+            all_patterns = []
+            all_patterns.extend(hand_patterns.get(language, []))
+            all_patterns.extend([p for p, _ in announcement_patterns.get(language, [])])
+            all_patterns.extend(belote_patterns.get(language, []))
+            
+            fuzzy_matches = self.language_processor.fuzzy_match_patterns(query_lower, all_patterns, threshold=70)
+            if fuzzy_matches:
+                best_pattern, score = fuzzy_matches[0]
+                if score >= 75:  # High confidence threshold
+                    # Handle based on pattern type
+                    if any(hp in best_pattern for hp in hand_patterns.get(language, [])):
+                        return self.handle_hand_evaluation(query, language)
+                    elif any(bp in best_pattern for bp in belote_patterns.get(language, [])):
+                        return self.get_belote_rebelote_info(language)
         
         return None
     
@@ -1039,7 +1470,10 @@ Reserved for extraordinary hands only!
                 'coinche': ['coinche', 'surcoinche', 'multiplicateur'],
                 'strategy': ['stratégie', 'conseil', 'astuce', 'tactique'],
                 'basic': ['règle', 'base', 'comment', 'début', 'jeu'],
-                'capot': ['capot', 'tous', 'plis']
+                'capot': ['capot', 'tous', 'plis', '250'],
+                'partner_points': ['partenaire', 'équipe', 'points', 'addition'],
+                'contract_management': ['gestion', 'contrat', 'enchère', 'validation'],
+                'general_help': ['aide', 'help', 'que.*faire', 'what.*do']
             },
             'en': {
                 'belote_rebelote': ['belote', 'rebelote', 'king.*queen', 'bonus.*20'],
@@ -1050,7 +1484,10 @@ Reserved for extraordinary hands only!
                 'coinche': ['coinche', 'surcoinche', 'multiplier'],
                 'strategy': ['strategy', 'advice', 'tip', 'tactic'],
                 'basic': ['rule', 'basic', 'how', 'start', 'game'],
-                'capot': ['capot', 'all', 'tricks']
+                'capot': ['capot', 'all', 'tricks', '250'],
+                'partner_points': ['partner', 'team', 'points', 'addition'],
+                'contract_management': ['management', 'contract', 'bid', 'validation'],
+                'general_help': ['help', 'aide', 'what.*do', 'que.*faire']
             }
         }
         
@@ -1066,9 +1503,29 @@ Reserved for extraordinary hands only!
             if re.search(word, query_lower):
                 return 'hand_evaluation'
         
+        # Vérifier capot spécifiquement
+        for word in keywords['capot']:
+            if re.search(word, query_lower):
+                return 'capot'
+        
+        # Vérifier points partenaires
+        for word in keywords.get('partner_points', []):
+            if re.search(word, query_lower):
+                return 'partner_points'
+                
+        # Vérifier gestion contrat
+        for word in keywords.get('contract_management', []):
+            if re.search(word, query_lower):
+                return 'contract_management'
+                
+        # Vérifier aide générale
+        for word in keywords.get('general_help', []):
+            if re.search(word, query_lower):
+                return 'general_help'
+        
         # Vérifier autres intentions
         for intent, words in keywords.items():
-            if intent in ['belote_rebelote', 'hand_evaluation']:
+            if intent in ['belote_rebelote', 'hand_evaluation', 'capot', 'partner_points', 'contract_management', 'general_help']:
                 continue
             for word in words:
                 if re.search(word, query_lower):
@@ -1105,44 +1562,64 @@ Reserved for extraordinary hands only!
         return response
         
     def get_fallback_response(self, intent: str, language: str = 'fr', context: List[str] = None) -> str:
-        """Réponse de secours quand aucune correspondance n'est trouvée"""
+        """Réponse de secours améliorée avec suggestions intelligentes"""
         fallbacks = {
             'fr': {
-                'belote_rebelote': "La Belote et Rebelote sont définies par avoir le Roi ET la Dame d'atout chez le même joueur. Annoncez 'Belote' puis 'Rebelote' en jouant ces cartes pour obtenir +20 points à votre équipe.",
-                'hand_evaluation': "Pour évaluer votre main selon les règles officielles, décrivez-moi vos cartes en détail. Par exemple: 'J'ai Valet, 9, As et 10 de carreau plus 4 autres cartes.' Je vous donnerai la recommandation officielle appropriée.",
-                'announcements': "Je peux vous expliquer les recommandations officielles pour chaque niveau d'annonce (90, 100, 110, 120, 130, 140). Quel niveau vous intéresse?",
-                'scoring': "Le système de score officiel de la Belote Contrée suit des règles précises. Voulez-vous connaître le calcul des points, le système de contrats, ou les bonus?",
-                'cards': "Les cartes ont des valeurs officielles différentes à l'atout et hors atout. Voulez-vous connaître les valeurs spécifiques et l'ordre de force?",
-                'coinche': "Le système Coinche officiel multiplie les gains et risques (×1, ×2, ×4). Voulez-vous en savoir plus sur les multiplicateurs?",
-                'strategy': "Je peux partager des stratégies officielles et conseils d'expert pour améliorer votre jeu. Quel aspect vous intéresse?",
-                'basic': "Je peux expliquer les règles officielles de base de la Belote Contrée. Par quoi voulez-vous commencer?",
-                'general': "Je suis Sofiene, votre expert en Belote Tunisienne Contrée. Je peux vous aider avec les règles officielles, les annonces, l'évaluation de main, le scoring, ou les stratégies. Que souhaitez-vous savoir?"
+                'belote_rebelote': "La Belote et Rebelote sont définies par avoir le Roi ET la Dame d'atout chez le même joueur. Annoncez 'Belote' puis 'Rebelote' en jouant ces cartes pour obtenir +20 points à votre équipe.\n\n**Essayez aussi:** 'Comment utiliser belote rebelote' ou 'Bonus belote 20 points'",
+                'hand_evaluation': "Pour évaluer votre main selon les règles officielles, décrivez-moi vos cartes en détail. Par exemple: 'J'ai Valet, 9, As et 10 de carreau plus 4 autres cartes.' Je vous donnerai la recommandation officielle appropriée.\n\n**Exemples:** 'Analyser ma main' ou 'Que annoncer avec 2 As'",
+                'announcements': "Je peux vous expliquer les recommandations officielles pour chaque niveau d'annonce (90, 100, 110, 120, 130, 140). Quel niveau vous intéresse?\n\n**Essayez:** 'Recommandation 110 points' ou 'Quand annoncer 120'",
+                'scoring': "Le système de score officiel de la Belote Contrée suit des règles précises. Voulez-vous connaître le calcul des points, le système de contrats, ou les bonus?\n\n**Essayez:** 'Comment calculer points' ou 'Système de score'",
+                'cards': "Les cartes ont des valeurs officielles différentes à l'atout et hors atout. Voulez-vous connaître les valeurs spécifiques et l'ordre de force?\n\n**Essayez:** 'Valeurs cartes atout' ou 'Ordre force cartes'",
+                'coinche': "Le système Coinche officiel multiplie les gains et risques (×1, ×2, ×4). Voulez-vous en savoir plus sur les multiplicateurs?\n\n**Essayez:** 'Règles coinche' ou 'Multiplicateurs contrat'",
+                'strategy': "Je peux partager des stratégies officielles et conseils d'expert pour améliorer votre jeu. Quel aspect vous intéresse?\n\n**Essayez:** 'Stratégie annonce' ou 'Conseils expert'",
+                'basic': "Je peux expliquer les règles officielles de base de la Belote Contrée. Par quoi voulez-vous commencer?\n\n**Essayez:** 'Règles de base' ou 'Comment jouer'",
+                'capot': "Le Capot signifie remporter TOUS les plis (8/8) pour 250 points automatiques. Il peut être annoncé (obligatoire) ou réalisé pendant le jeu.\n\n**Essayez:** 'Règles capot détaillées' ou 'Capot annoncé vs réalisé'",
+                'partner_points': "Les points des partenaires s'additionnent pour former le score d'équipe. L'équipe preneuse doit atteindre son contrat, sinon l'équipe adverse prend tout (162 + bonus).\n\n**Essayez:** 'Addition points équipe' ou 'Calcul score partenaires'",
+                'contract_management': "La gestion des contrats implique les phases d'annonce, validation, coinche/surcoinche et responsabilités d'équipe.\n\n**Essayez:** 'Phase annonce' ou 'Validation contrat'",
+                'general_help': f"Je suis Sofiene, votre expert en Belote Tunisienne Contrée. Je comprends beaucoup de façons de poser des questions!\n\n**Mes spécialités:**\n• Recommandations officielles pour annonces\n• Évaluation de main précise\n• Règles complètes et stratégies\n• Support bilingue français/anglais\n\n**Essayez:** 'Recommandation 120 points' ou 'Analyser ma main'",
+                'general': f"Je suis Sofiene, votre expert en Belote Tunisienne Contrée. Je comprends beaucoup de façons de poser des questions!\n\n**Suggestions basées sur votre question:**\n• 'Recommandation pour [90-140] points'\n• 'Comment utiliser belote rebelote'\n• 'Analyser ma main avec [vos cartes]'\n• 'Règles officielles [sujet]'\n\n**Astuce:** Je comprends aussi les fautes de frappe et variations!"
             },
             'en': {
-                'belote_rebelote': "Belote and Rebelote are defined by having King AND Queen of trump with the same player. Announce 'Belote' then 'Rebelote' when playing these cards to get +20 points for your team.",
-                'hand_evaluation': "To evaluate your hand according to official rules, describe your cards in detail. For example: 'I have Jack, 9, Ace and 10 of diamonds plus 4 other cards.' I'll give you the appropriate official recommendation.",
-                'announcements': "I can explain official recommendations for each announcement level (90, 100, 110, 120, 130, 140). Which level interests you?",
-                'scoring': "The official Belote Contrée scoring system follows precise rules. Would you like to know about point calculation, contract system, or bonuses?",
-                'cards': "Cards have different official values for trump and non-trump. Would you like to know specific values and strength order?",
-                'coinche': "The official Coinche system multiplies gains and risks (×1, ×2, ×4). Would you like to know more about multipliers?",
-                'strategy': "I can share official strategies and expert tips to improve your game. What aspect interests you?",
-                'basic': "I can explain official basic rules of Belote Contrée. Where would you like to start?",
-                'general': "I'm Sofiene, your Tunisian Belote Contrée expert. I can help with official rules, announcements, hand evaluation, scoring, or strategies. What would you like to know?"
+                'belote_rebelote': "Belote and Rebelote are defined by having King AND Queen of trump with the same player. Announce 'Belote' then 'Rebelote' when playing these cards to get +20 points for your team.\n\n**Try also:** 'How to use belote rebelote' or 'Belote bonus 20 points'",
+                'hand_evaluation': "To evaluate your hand according to official rules, describe your cards in detail. For example: 'I have Jack, 9, Ace and 10 of diamonds plus 4 other cards.' I'll give you the appropriate official recommendation.\n\n**Examples:** 'Analyze my hand' or 'What to announce with 2 Aces'",
+                'announcements': "I can explain official recommendations for each announcement level (90, 100, 110, 120, 130, 140). Which level interests you?\n\n**Try:** 'Recommendation 110 points' or 'When to announce 120'",
+                'scoring': "The official Belote Contrée scoring system follows precise rules. Would you like to know about point calculation, contract system, or bonuses?\n\n**Try:** 'How to calculate points' or 'Scoring system'",
+                'cards': "Cards have different official values for trump and non-trump. Would you like to know specific values and strength order?\n\n**Try:** 'Trump card values' or 'Card strength order'",
+                'coinche': "The official Coinche system multiplies gains and risks (×1, ×2, ×4). Would you like to know more about multipliers?\n\n**Try:** 'Coinche rules' or 'Contract multipliers'",
+                'strategy': "I can share official strategies and expert tips to improve your game. What aspect interests you?\n\n**Try:** 'Announcement strategy' or 'Expert advice'",
+                'basic': "I can explain official basic rules of Belote Contrée. Where would you like to start?\n\n**Try:** 'Basic rules' or 'How to play'",
+                'capot': "Capot means winning ALL tricks (8/8) for 250 automatic points. It can be announced (mandatory) or achieved during play.\n\n**Try:** 'Detailed capot rules' or 'Announced vs achieved capot'",
+                'partner_points': "Partner points add up to form team score. Taking team must reach their contract, otherwise opposing team takes all (162 + bonus).\n\n**Try:** 'Team points addition' or 'Partner score calculation'",
+                'contract_management': "Contract management involves announcement phases, validation, coinche/surcoinche and team responsibilities.\n\n**Try:** 'Announcement phase' or 'Contract validation'",
+                'general_help': f"I'm Sofiene, your Tunisian Belote Contrée expert. I understand many ways to ask questions!\n\n**My specialties:**\n• Official recommendations for announcements\n• Precise hand evaluation\n• Complete rules and strategies\n• Bilingual French/English support\n\n**Try:** 'Recommendation 120 points' or 'Analyze my hand'",
+                'general': f"I'm Sofiene, your Tunisian Belote Contrée expert. I understand many ways to ask questions!\n\n**Suggestions based on your question:**\n• 'Recommendation for [90-140] points'\n• 'How to use belote rebelote'\n• 'Analyze my hand with [your cards]'\n• 'Official rules [topic]'\n\n**Tip:** I also understand typos and variations!"
             }
         }
         
         return fallbacks.get(language, fallbacks['fr']).get(intent, fallbacks[language]['general'])
         
     def process_query(self, query: str, language: str = 'fr', context: List[str] = None) -> str:
-        """Méthode principale pour traiter les requêtes"""
-        # Essayer d'abord la reconnaissance de patterns spécifiques
-        pattern_response = self.handle_specific_patterns(query, language)
-        if pattern_response:
-            return pattern_response
+        """Méthode principale pour traiter les requêtes avec amélioration linguistique"""
+        # Normalize query with enhanced language processing
+        original_query = query
+        normalized_query = self.language_processor.normalize_query(query, language)
         
-        # Recherche sémantique en secours
-        intent = self.extract_intent(query, language)
-        matches = self.find_best_matches(query, language)
+        # Try specific patterns first with both original and normalized queries
+        for test_query in [original_query, normalized_query]:
+            pattern_response = self.handle_specific_patterns(test_query, language)
+            if pattern_response:
+                return pattern_response
+        
+        # Enhanced semantic search using normalized query
+        intent = self.extract_intent(normalized_query, language)
+        matches = self.find_best_matches(normalized_query, language)
+        
+        # If no good matches with normalized query, try original
+        if not matches or (matches and matches[0].score < 0.4):
+            matches_original = self.find_best_matches(original_query, language)
+            if matches_original and matches_original[0].score > (matches[0].score if matches else 0):
+                matches = matches_original
+        
         response = self.generate_contextual_response(matches, intent, language, context)
         return response
 
