@@ -72,26 +72,26 @@ class LanguageProcessor:
         # Patterns de variation commune
         self.common_variations = {
             'fr': {
-                r'règle?\s*d[\'']?annonce?s?': 'règles annonces',
-                r'comment\s+annoncer': 'comment annoncer',
-                r'quand\s+annoncer': 'quand annoncer',
-                r'que?\s+annoncer': 'que annoncer',
-                r'calcul\s*(?:de\s*)?(?:score|point)s?': 'calcul score',
-                r'belote\s*(?:et\s*)?rebelote': 'belote rebelote',
-                r'roi\s*(?:et\s*)?dame': 'roi dame',
-                r'multiplicateur|coinche': 'coinche',
-                r'tous\s*(?:les\s*)?plis': 'capot'
+                r"règle?\s*d[\'\"]?annonce?s?": "règles annonces",
+                r"comment\s+annoncer": "comment annoncer",
+                r"quand\s+annoncer": "quand annoncer",
+                r"que?\s+annoncer": "que annoncer",
+                r"calcul\s*(?:de\s*)?(?:score|point)s?": "calcul score",
+                r"belote\s*(?:et\s*)?rebelote": "belote rebelote",
+                r"roi\s*(?:et\s*)?dame": "roi dame",
+                r"multiplicateur|coinche": "coinche",
+                r"tous\s*(?:les\s*)?plis": "capot"
             },
             'en': {
-                r'announcement?\s*rules?': 'announcement rules',
-                r'how\s+to\s+announce': 'how to announce',
-                r'when\s+to\s+announce': 'when to announce',
-                r'what\s+to\s+announce': 'what to announce',
-                r'score?\s*calculation': 'score calculation',
-                r'belote\s*(?:and\s*)?rebelote': 'belote rebelote',
-                r'king\s*(?:and\s*)?queen': 'king queen',
-                r'multiplier|coinche': 'coinche',
-                r'all\s*tricks': 'capot'
+                r"announcement?\s*rules?": "announcement rules",
+                r"how\s+to\s+announce": "how to announce",
+                r"when\s+to\s+announce": "when to announce",
+                r"what\s+to\s+announce": "what to announce",
+                r"score?\s*calculation": "score calculation",
+                r"belote\s*(?:and\s*)?rebelote": "belote rebelote",
+                r"king\s*(?:and\s*)?queen": "king queen",
+                r"multiplier|coinche": "coinche",
+                r"all\s*tricks": "capot"
             }
         }
     
@@ -874,15 +874,15 @@ class EnhancedSofieneAI:
         self.hand_evaluator = EnhancedHandEvaluator()
         self.language_processor = LanguageProcessor()
         self.fuzzy_matcher = FuzzyMatcher()
-        self.rule_embeddings = {}
+        self.rule_embeddings = {}  # Will be set after instantiation
         self.context_window = 5
         
         # Cache pour améliorer les performances
         self.query_cache = {}
         self.max_cache_size = 100
-        
-        if self.model:
-            self.initialize_embeddings()
+        # Do NOT call initialize_embeddings here (Streamlit cache issue)
+        # if self.model:
+        #     self.initialize_embeddings()
     
     @st.cache_data
     def initialize_embeddings(_self):
@@ -1972,7 +1972,8 @@ def init_enhanced_session_state():
         st.session_state.conversation = EnhancedConversationManager()
     if 'ai' not in st.session_state:
         st.session_state.ai = EnhancedSofieneAI()
-        st.session_state.ai.rule_embeddings = st.session_state.ai.initialize_embeddings()
+        if st.session_state.ai.model:
+            st.session_state.ai.rule_embeddings = st.session_state.ai.initialize_embeddings()
     if 'language' not in st.session_state:
         st.session_state.language = 'fr'
     if 'messages' not in st.session_state:
@@ -2471,6 +2472,16 @@ I'm here to help!"""
         
         📧 Contact: BellaajMohsen7@github.com | 🌟 Version 2.0 Production | 🧠 AI Enhanced
         """)
+
+@st.cache_resource
+def load_sentence_transformer():
+    if DEPENDENCIES_AVAILABLE:
+        try:
+            return SentenceTransformer('all-MiniLM-L6-v2')
+        except Exception as e:
+            st.error(f"Error loading model: {str(e)}")
+            return None
+    return None
 
 if __name__ == "__main__":
     main_enhanced()
